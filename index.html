@@ -494,11 +494,16 @@ Rules:
             stroke={isSelected ? "#2563eb" : T.border}
             strokeWidth={isSelected ? 1.5 : .7} filter="url(#cshadow)" />
           {relColor && <rect x={n.x+6} y={n.y+1} width={NW-12} height={7} rx={2} fill={relColor} opacity={.8} />}
-          {ess && <circle cx={n.x+NW-10} cy={n.y+20} r={5} fill={ess.dot} />}
-          {status !== "haven't watched" && stMeta && (
-            <circle cx={n.x+NW-24} cy={n.y+20} r={4} fill={stMeta.color} opacity={.9} />
+          {ess && (
+            <foreignObject x={n.x+NW-68} y={n.y+10} width={62} height={16}>
+              <div xmlns="http://www.w3.org/1999/xhtml" style={{
+                fontSize:9, fontWeight:700, color:ess.dot, textAlign:"right",
+                pointerEvents:"none", fontFamily:"'Segoe UI',system-ui,sans-serif",
+                whiteSpace:"nowrap", overflow:"hidden", textTransform:"uppercase", letterSpacing:".04em",
+              }}>{ess.label}</div>
+            </foreignObject>
           )}
-          <foreignObject x={n.x+9} y={n.y+10} width={NW-26} height={26}>
+          <foreignObject x={n.x+9} y={n.y+10} width={ess ? NW-76 : NW-18} height={26}>
             <div xmlns="http://www.w3.org/1999/xhtml" style={{
               fontSize:12, fontWeight:700, lineHeight:1.3, color:T.heading,
               overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis",
