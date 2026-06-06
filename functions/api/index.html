@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Franchise Navigator — DTDM</title>
+  <meta name="description" content="Map any film, TV, or media franchise. See sequels, prequels, spinoffs and watch order at a glance." />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body { background: #f8fafc; font-family: 'Segoe UI', system-ui, sans-serif; }
+    input, select, button { font-family: inherit; }
+    input[type=number]::-webkit-inner-spin-button { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useCallback, useEffect } = React;
+
+    // ── Config ──────────────────────────────────────────────────────────────────
+    const MEDIA = [
+      { key:"film",     label:"Film" },
+      { key:"tv",       label:"TV Series" },
+      { key:"animated", label:"Animated" },
+      { key:"book",     label:"Novel" },
+      { key:"comic",    label:"Comic" },
+      { key:"game",     label:"Video Game" },
+      { key:"short",    label:"Short/Special" },
+    ];
+
+    const REL = {
+      standalone:            { label:"Standalone",           color:"#16a34a" },
+      sequel:                { label:"Sequel",                color:"#ea580c" },
+      prequel:               { label:"Prequel",               color:"#7c3aed" },
+      spinoff:               { label:"Spin-off",              color:"#0284c7" },
+      remake:                { label:"Remake / Re-imagining", color:"#dc2626" },
+      directors_cut:         { label:"Director\u2019s Cut",   color:"#ca8a04" },
+      crossover:             { label:"Crossover / Related",   color:"#0d9488" },
+      prior_knowledge_helps: { label:"Prior Context Helps",   color:"#94a3b8" },
+    };
+
+    const EDGE_MAP = {
+      sequel_of:"sequel",       prequel_of:"prequel",       spinoff_of:"spinoff",
+      remake_of:"remake",       reimagining_of:"remake",    companion_to:"crossover",
+      crossover_with:"crossover", directors_cut_of:"directors_cut",
+      anthology_entry_of:"crossover",
+    };
+
+    const CHAIN_REL = new Set(["sequel_of","prequel_of","directors_cut_of","remake_of","reimagining_of"]);
+
+    const STATUS = {
+      "haven't watched": { label:"Haven't watched", color:"#94a3b8" },
+      watching:          { label:"Watching",         color:"#2563eb" },
+      finished:          { label:"Finished",         color:"#059669" },
+      rewatching:        { label:"Rewatching",        color:"#d97706" },
+      rewatched:         { label:"Rewatched",         color:"#7c3aed" },
+    };
+
+    const ESS = {
+      essential:    { label:"Essential",    dot:"#f59e0b" },
+      recommended:  { label:"Recommended",  dot:"#10b981" },
+      optional:     { label:"Optional",     dot:"#94a3b8" },
+      supplemental: { label:"Supplemental", dot:"#e2e8f0" },
+    };
+
+    const imdbSearch = (title, year) =>
+      `https://www.imdb.com/find/?q=${encodeURIComponent(title+(year?" "+year:""))}&s=tt&ttype=ft,tv`;
+
+    const NH = 72, NW = 340, CARD_GAP = 12;
+    const LPAD = 56, CHAIN_W = 24, CARD_X = LPAD + CHAIN_W + 6;
+    const TPAD = 20;
+    const DEFAULT_TYPES = ["film","tv","animated"];
+    const MAX_SAVED = 15;
+
+    // ── System Prompt ───────────────────────────────────────────────────────────
+    const SYS = `You are a media franchise expert. Your primary data reference is IMDB. Return ONLY a single valid JSON object — no markdown, no code fences, no preamble, no trailing text.
+
+The query may be a franchise/IP name, actor name, or character name.
+
+JSON schema:
+{
+  "ip": "Canonical name",
+  "searchType": "franchise|actor|character",
+  "description": "Two sentences: what it is, and why navigating it is complex.",
+  "entries": [{
+    "id": "unique_snake_case_id",
+    "imdbId": "tt1234567",
+    "title": "Official Title",
+    "year": 1977,
+    "mediaType": "film|tv|animated|book|comic|game|short",
+    "synopsis": "One sentence.",
+    "relationships": ["standalone","sequel","prequel","spinoff","remake","reimagining","directors_cut","companion","crossover","anthology","elseworlds","prior_knowledge_helps"],
+    "relatedTo": [{"id":"other_entry_id","type":"sequel_of|prequel_of|spinoff_of|remake_of|companion_to|crossover_with|reimagining_of|directors_cut_of|anthology_entry_of"}],
+    "essentialness": "essential|recommended|optional|supplemental",
+    "era": "optional grouping label",
+    "notes": "optional one-sentence watch-order tip"
+  }]
+}
+
+Rules:
+- 20-25 entries maximum; prioritize significant entries
+- Include real IMDB IDs for film/tv/animated
+- Sort entries by year ascending
+- relatedTo.id must exactly match another entry's id
+- Include only the requested mediaTypes
+- CRITICAL for sequels: direct sequel/prequel chains must be explicitly linked via relatedTo.`;
+
+    // ── Storage (localStorage) ──────────────────────────────────────────────────
+    function storageGet(key) {
+      try { const v = localStorage.getItem(key); return Promise.resolve(v ? JSON.parse(v) : null); }
+      catch { return Promise.resolve(null); }
+    }
+    function storageSet(key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+    }
+
+    // ── API ─────────────────────────────────────────────────────────────────────
+    async function fetchFranchise(query, types) {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 60000);
+      let resp;
+      try {
+        resp = await fetch("/api/map", {
+          method: "POST", signal: ctrl.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 8000,
+            system: SYS,
+            messages: [{ role: "user", content: `Query: "${query}"\nMedia types: ${types.join(", ")}\n25 entries max. Return JSON only. Start your response with {"ip": and nothing else before it.` }],
+          }),
+        });
+      } finally { clearTimeout(t); }
+
+      if (!resp.ok) { const b = await resp.text().catch(() => ""); throw new Error(`API ${resp.status}: ${b.slice(0, 200)}`); }
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error.message);
+
+      const full = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+      if (!full.trim()) throw new Error("Empty response");
+
+      const knownStart = full.search(/\{\s*"ip"\s*:/);
+      if (knownStart === -1) throw new Error("No JSON found in response: " + full.slice(0, 300));
+      const end = full.lastIndexOf("}");
+      if (end === -1 || end < knownStart) throw new Error("Response truncated — no closing brace.");
+
+      let parsed;
+      try { parsed = JSON.parse(full.slice(knownStart, end + 1)); }
+      catch (err) { throw new Error("JSON parse failed: " + err.message + "\n\n" + full.slice(knownStart, knownStart + 300)); }
+      if (!parsed.entries || !Array.isArray(parsed.entries)) throw new Error("Missing entries array");
+      return parsed;
+    }
+
+    // ── Layout ──────────────────────────────────────────────────────────────────
+    function buildLayout(entries, types) {
+      const vis = [...entries.filter(e => types.includes(e.mediaType))].sort((a, b) => a.year - b.year);
+      if (!vis.length) return null;
+
+      const nodes = vis.map((e, i) => ({ ...e, x: CARD_X, y: TPAD + i * (NH + CARD_GAP), idx: i }));
+      const nMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+      const chainEdges = [];
+      const seen = new Set();
+      nodes.forEach(n => {
+        (n.relatedTo || []).forEach(r => {
+          const t = nMap[r.id]; if (!t) return;
+          if (!CHAIN_REL.has(r.type)) return;
+          const ek = [n.id, r.id].sort().join("‖");
+          if (seen.has(ek)) return; seen.add(ek);
+          const [top, bot] = n.y < t.y ? [n, t] : [t, n];
+          chainEdges.push({ top, bot, rtype: r.type });
+        });
+      });
+
+      const otherEdges = [];
+      const seen2 = new Set();
+      nodes.forEach(n => {
+        (n.relatedTo || []).forEach(r => {
+          const t = nMap[r.id]; if (!t) return;
+          if (CHAIN_REL.has(r.type)) return;
+          const ek = [n.id, r.id].sort().join("‖") + r.type;
+          if (seen2.has(ek)) return; seen2.add(ek);
+          otherEdges.push({ s: n, t, rtype: r.type });
+        });
+      });
+
+      return {
+        nodes, chainEdges, otherEdges,
+        totalH: TPAD + vis.length * (NH + CARD_GAP) + 40,
+        totalW: CARD_X + NW + 20,
+      };
+    }
+
+    // ── App ─────────────────────────────────────────────────────────────────────
+    function App() {
+      const [query, setQuery]         = useState("");
+      const [types, setTypes]         = useState(DEFAULT_TYPES);
+      const [franchise, setFranchise] = useState(null);
+      const [loading, setLoading]     = useState(false);
+      const [error, setError]         = useState(null);
+      const [selId, setSelId]         = useState(null);
+      const [statuses, setStatuses]   = useState({});
+      const [saved, setSaved]         = useState([]);
+      const [yearFrom, setYearFrom]   = useState(null);
+      const [yearTo, setYearTo]       = useState(null);
+
+      useEffect(() => {
+        storageGet("fn-statuses").then(s => s && setStatuses(s));
+        storageGet("fn-saved").then(s => s && setSaved(s));
+      }, []);
+
+      const toggleType = useCallback(k => setTypes(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]), []);
+
+      const updateStatus = useCallback((id, status) => {
+        setStatuses(prev => { const next = { ...prev, [id]: status }; storageSet("fn-statuses", next); return next; });
+      }, []);
+
+      const doSearch = async (q = query, t = types, cached = null) => {
+        if (!q.trim() || !t.length) return;
+        setLoading(true); setError(null); setFranchise(null); setSelId(null);
+        try {
+          const data = cached || await fetchFranchise(q.trim(), t);
+          setFranchise(data);
+          setSaved(prev => {
+            const filtered = prev.filter(s => s.query.toLowerCase() !== q.trim().toLowerCase());
+            const next = [{ query: q.trim(), types: t, data, timestamp: Date.now(),
+              entryCount: data.entries.filter(e => t.includes(e.mediaType)).length }, ...filtered].slice(0, MAX_SAVED);
+            storageSet("fn-saved", next); return next;
+          });
+        } catch (e) { setError(e.message || String(e)); }
+        finally { setLoading(false); }
+      };
+
+      const removeSaved = ts => setSaved(prev => {
+        const next = prev.filter(s => s.timestamp !== ts); storageSet("fn-saved", next); return next;
+      });
+
+      const allEntryYears = franchise?.entries?.map(e => e.year) || [];
+
+      const layout = useMemo(() => {
+        if (!franchise) return null;
+        const filtered = franchise.entries.filter(e => {
+          const y = e.year;
+          return (!yearFrom || y >= yearFrom) && (!yearTo || y <= yearTo);
+        });
+        return buildLayout(filtered, types);
+      }, [franchise, types, yearFrom, yearTo]);
+
+      const selNode = useMemo(() => layout?.nodes.find(n => n.id === selId) || null, [layout, selId]);
+
+      const T = {
+        heading:"#0f172a", body:"#1e293b", muted:"#475569", faint:"#94a3b8",
+        border:"#e2e8f0", cardBg:"#ffffff", bg:"#f8fafc", panelBg:"#f1f5f9",
+      };
+
+      return (
+        <div style={{ fontFamily:"'Segoe UI',system-ui,sans-serif", color:T.body, background:T.bg, minHeight:"100vh" }}>
+
+          {/* Sticky header */}
+          <div style={{ padding:"13px 16px 11px", borderBottom:`1px solid ${T.border}`, background:T.panelBg, position:"sticky", top:0, zIndex:10 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:9 }}>
+              <span style={{ fontSize:17 }}>🔭</span>
+              <span style={{ fontSize:14, fontWeight:700, color:T.heading, letterSpacing:"-.01em" }}>Franchise Navigator</span>
+              {franchise && <span style={{ marginLeft:"auto", fontSize:11, color:T.muted, background:"#fff", padding:"2px 9px", borderRadius:20, border:`1px solid ${T.border}` }}>{franchise.ip} · {layout?.nodes.length ?? 0} entries</span>}
+            </div>
+
+            <div style={{ display:"flex", gap:7, marginBottom:9 }}>
+              <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && !loading && doSearch()}
+                placeholder="Franchise, actor, or character — e.g. Star Wars · Batman · Tom Cruise"
+                style={{ flex:1, fontSize:13, padding:"7px 11px", borderRadius:7, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none" }} />
+              <button onClick={() => doSearch()} disabled={loading || !query.trim() || !types.length}
+                style={{ fontSize:13, fontWeight:600, cursor:loading ? "wait" : "pointer", padding:"0 16px", height:35, borderRadius:7,
+                  background:(!query.trim() || !types.length || loading) ? "#e2e8f0" : "#0f172a",
+                  color:(!query.trim() || !types.length || loading) ? T.faint : "#fff", border:"none", whiteSpace:"nowrap" }}>
+                {loading ? "⟳ Working…" : "Map It →"}
+              </button>
+            </div>
+
+            <div style={{ display:"flex", gap:5, flexWrap:"wrap", alignItems:"center", marginBottom: saved.length ? 8 : 0 }}>
+              {MEDIA.map(m => (
+                <button key={m.key} onClick={() => toggleType(m.key)} style={{
+                  padding:"3px 10px", borderRadius:20, fontSize:11, cursor:"pointer", fontWeight:500,
+                  border:`1.5px solid ${types.includes(m.key) ? "#0f172a" : T.border}`,
+                  background: types.includes(m.key) ? "#0f172a" : "#fff",
+                  color: types.includes(m.key) ? "#fff" : T.muted, transition:"all .12s",
+                }}>{m.label}</button>
+              ))}
+              <span style={{ fontSize:11, color:T.faint, margin:"0 2px" }}>|</span>
+              <input type="number" value={yearFrom ?? ""} onChange={e => setYearFrom(e.target.value ? parseInt(e.target.value) : null)}
+                placeholder={allEntryYears.length ? String(Math.min(...allEntryYears)) : "From"}
+                style={{ width:64, height:26, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
+              <span style={{ fontSize:11, color:T.faint }}>–</span>
+              <input type="number" value={yearTo ?? ""} onChange={e => setYearTo(e.target.value ? parseInt(e.target.value) : null)}
+                placeholder="2026"
+                style={{ width:64, height:26, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
+              {(yearFrom || yearTo) && (
+                <button onClick={() => { setYearFrom(null); setYearTo(null); }}
+                  style={{ fontSize:11, color:T.muted, background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"2px 8px", cursor:"pointer", height:26 }}>Reset</button>
+              )}
+            </div>
+
+            {saved.length > 0 && (
+              <div style={{ display:"flex", gap:5, flexWrap:"wrap", alignItems:"center" }}>
+                <span style={{ fontSize:10, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em" }}>Recent:</span>
+                {saved.map(s => (
+                  <div key={s.timestamp} style={{ display:"flex", alignItems:"center", background:"#fff", border:`1px solid ${T.border}`, borderRadius:20, overflow:"hidden" }}>
+                    <button onClick={() => { setQuery(s.query); setTypes(s.types); doSearch(s.query, s.types, s.data); }}
+                      style={{ padding:"3px 10px", fontSize:11, cursor:"pointer", background:"transparent", border:"none", color:T.body }}>
+                      {s.query}<span style={{ color:T.faint, fontSize:10 }}> ({s.entryCount})</span>
+                    </button>
+                    <button onClick={() => removeSaved(s.timestamp)}
+                      style={{ padding:"2px 8px 2px 2px", fontSize:13, cursor:"pointer", background:"transparent", border:"none", color:T.faint }}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {franchise && <p style={{ margin:"9px 0 0", fontSize:11, color:T.muted, lineHeight:1.55 }}>{franchise.description}</p>}
+          </div>
+
+          {error && <div style={{ margin:"12px 16px", padding:"9px 13px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, fontSize:12, color:"#b91c1c", whiteSpace:"pre-wrap" }}>⚠ {error}</div>}
+
+          {loading && <LoadingProgress T={T} query={query} />}
+
+          <div style={{ display:"flex" }}>
+            <div style={{ flex:1, overflowX:"auto" }}>
+              {!franchise && !loading && !error && (
+                <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"80px 20px", gap:10, textAlign:"center" }}>
+                  <div style={{ fontSize:48 }}>🌌</div>
+                  <div style={{ fontSize:15, fontWeight:700, color:T.heading }}>Search a franchise, actor, or character</div>
+                  <div style={{ fontSize:12, color:T.faint }}>Star Wars · Marvel MCU · Batman · Doctor Who · Tom Cruise</div>
+                </div>
+              )}
+              {layout && !loading && (
+                <GraphView layout={layout} statuses={statuses} selId={selId}
+                  onSel={id => setSelId(prev => prev === id ? null : id)} onStatus={updateStatus} T={T} />
+              )}
+            </div>
+            {selNode && (
+              <DetailPanel node={selNode} nodes={layout.nodes} statuses={statuses}
+                onStatus={updateStatus} onClose={() => setSelId(null)} onNav={setSelId} T={T} />
+            )}
+          </div>
+
+          {franchise && !loading && (
+            <div style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}`, background:T.panelBg, display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", fontSize:11, color:T.muted }}>
+              <span style={{ fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".05em", fontSize:10 }}>Connections:</span>
+              {Object.entries(REL).map(([k, v]) => (
+                <span key={k} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                  <span style={{ width:16, height:3, background:v.color, display:"inline-block", borderRadius:2 }} />{v.label}
+                </span>
+              ))}
+              <span style={{ marginLeft:4, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".05em", fontSize:10 }}>Priority:</span>
+              {Object.entries(ESS).map(([k, v]) => (
+                <span key={k} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                  <span style={{ width:8, height:8, borderRadius:"50%", background:v.dot, display:"inline-block" }} />{v.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── Loading Progress ─────────────────────────────────────────────────────────
+    function LoadingProgress({ T, query }) {
+      const [tick, setTick]   = useState(0);
+      const [phase, setPhase] = useState(0);
+      const phases = [
+        { label: `Looking up "${query}"`,    dur: 4000  },
+        { label: "Fetching entries & years", dur: 6000  },
+        { label: "Mapping relationships",    dur: 7000  },
+        { label: "Building sequel chains",   dur: 5000  },
+        { label: "Almost ready…",           dur: 99999 },
+      ];
+      useEffect(() => { const i = setInterval(() => setTick(t => t + 1), 80); return () => clearInterval(i); }, []);
+      useEffect(() => {
+        if (phase >= phases.length - 1) return;
+        const t = setTimeout(() => setPhase(p => p + 1), phases[phase].dur);
+        return () => clearTimeout(t);
+      }, [phase]);
+      const pct = Math.round(Math.min(0.97, (phase + Math.min(1, (tick * 80) / phases[phase].dur)) / phases.length) * 100);
+      return (
+        <div style={{ borderBottom:`1px solid ${T.border}`, background:T.bg }}>
+          <style>{`@keyframes fn-shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}`}</style>
+          <div style={{ display:"flex", alignItems:"center", gap:10, padding:"13px 16px 7px" }}>
+            <span style={{ fontSize:20, flexShrink:0 }}>🔭</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:T.heading, marginBottom:1 }}>{phases[phase].label}</div>
+              <div style={{ fontSize:11, color:T.faint }}>Usually 10–20 seconds</div>
+            </div>
+            <div style={{ fontSize:18, fontWeight:700, color:"#7c3aed", fontVariantNumeric:"tabular-nums" }}>{pct}%</div>
+          </div>
+          <div style={{ margin:"0 16px 8px", height:7, borderRadius:99, background:T.border, overflow:"hidden", position:"relative" }}>
+            <div style={{ position:"absolute", top:0, left:0, height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#2563eb,#7c3aed)", borderRadius:99, transition:"width .12s linear" }} />
+            <div style={{ position:"absolute", top:0, left:0, height:"100%", width:"30%", background:"linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent)", animation:"fn-shimmer 1.4s ease-in-out infinite" }} />
+          </div>
+          <div style={{ display:"flex", gap:5, padding:"0 16px 11px" }}>
+            {phases.slice(0, -1).map((_, i) => (
+              <div key={i} style={{ height:4, borderRadius:99, flexShrink:0, width:i === phase ? 22 : 8,
+                background: i < phase ? "#2563eb" : i === phase ? "#7c3aed" : T.border, transition:"all .3s ease" }} />
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Graph View ───────────────────────────────────────────────────────────────
+    function GraphView({ layout, statuses, selId, onSel, onStatus, T }) {
+      const { nodes, chainEdges, otherEdges, totalH, totalW } = layout;
+      return (
+        <svg width={totalW} height={totalH} style={{ display:"block", background:T.bg }}>
+          <defs>
+            {Object.entries(REL).map(([k, v]) => (
+              <marker key={k} id={`arr_${k}`} markerWidth="7" markerHeight="7" refX="5" refY="3.5" orient="auto">
+                <path d="M0,0 L7,3.5 L0,7 z" fill={v.color} opacity=".8" />
+              </marker>
+            ))}
+            <filter id="cshadow"><feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor="#00000012" /></filter>
+          </defs>
+
+          {nodes.map((n, i) => (
+            <rect key={i} x={0} y={n.y - 4} width={totalW} height={NH + CARD_GAP + 4}
+              fill={i % 2 === 0 ? "#f8fafc" : "#ffffff"} />
+          ))}
+
+          {nodes.map((n, i) => {
+            const prev = nodes[i - 1];
+            if (prev && prev.year === n.year) return null;
+            return (
+              <text key={`yr_${i}`} x={LPAD - 6} y={n.y + NH / 2} textAnchor="end" dominantBaseline="central"
+                fontSize={11} fontWeight="700" fill="#94a3b8" fontFamily="'Segoe UI',system-ui,sans-serif">
+                {n.year}
+              </text>
+            );
+          })}
+
+          <line x1={LPAD} y1={TPAD} x2={LPAD} y2={totalH} stroke="#e2e8f0" strokeWidth={.5} />
+
+          {chainEdges.map(({ top, bot, rtype }, i) => {
+            const rk = EDGE_MAP[rtype] || "sequel";
+            const col = REL[rk]?.color || "#ea580c";
+            const sx = LPAD + CHAIN_W / 2;
+            const sy = top.y + NH, ty = bot.y;
+            return (
+              <g key={`ch_${i}`}>
+                <line x1={sx} y1={sy} x2={sx} y2={ty} stroke={col} strokeWidth={3} opacity={.75} />
+                <circle cx={sx} cy={sy + 1} r={3} fill={col} opacity={.75} />
+                <path d={`M${sx-4},${ty-6} L${sx},${ty} L${sx+4},${ty-6}`} fill="none" stroke={col} strokeWidth={2} opacity={.75} />
+              </g>
+            );
+          })}
+
+          {otherEdges.map(({ s, t, rtype }, i) => {
+            const rk = EDGE_MAP[rtype] || "crossover";
+            const col = REL[rk]?.color || "#0d9488";
+            const x = LPAD + 6;
+            const sy = s.y + NH / 2, ty = t.y + NH / 2;
+            const bow = Math.abs(sy - ty) * 0.35 + 14;
+            const d = `M${x},${sy} C${x-bow},${sy} ${x-bow},${ty} ${x},${ty}`;
+            return (
+              <path key={`oe_${i}`} d={d} fill="none" stroke={col} strokeWidth={1.2}
+                strokeOpacity={.4} strokeDasharray="5,4" markerEnd={`url(#arr_${rk})`} />
+            );
+          })}
+
+          {nodes.map(n => (
+            <CardNode key={n.id} node={n} status={statuses[n.id] || "haven't watched"}
+              isSelected={selId === n.id} onSel={onSel} onStatus={onStatus} T={T} />
+          ))}
+        </svg>
+      );
+    }
+
+    // ── Card Node ────────────────────────────────────────────────────────────────
+    function CardNode({ node: n, status, isSelected, onSel, onStatus, T }) {
+      const pRel = n.relationships?.[0];
+      const relColor = REL[pRel]?.color;
+      const relLabel = REL[pRel]?.label;
+      const ess = ESS[n.essentialness];
+      const stMeta = STATUS[status];
+      const mt = MEDIA.find(m => m.key === n.mediaType);
+      return (
+        <g onClick={() => onSel(n.id)} style={{ cursor:"pointer" }}>
+          <rect x={n.x} y={n.y} width={NW} height={NH} rx={7}
+            fill={isSelected ? "#eff6ff" : T.cardBg}
+            stroke={isSelected ? "#2563eb" : T.border}
+            strokeWidth={isSelected ? 1.5 : .7} filter="url(#cshadow)" />
+          {relColor && <rect x={n.x+6} y={n.y+1} width={NW-12} height={7} rx={2} fill={relColor} opacity={.8} />}
+          {ess && <circle cx={n.x+NW-10} cy={n.y+20} r={5} fill={ess.dot} />}
+          {status !== "haven't watched" && stMeta && (
+            <circle cx={n.x+NW-24} cy={n.y+20} r={4} fill={stMeta.color} opacity={.9} />
+          )}
+          <foreignObject x={n.x+9} y={n.y+10} width={NW-26} height={26}>
+            <div xmlns="http://www.w3.org/1999/xhtml" style={{
+              fontSize:12, fontWeight:700, lineHeight:1.3, color:T.heading,
+              overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis",
+              pointerEvents:"none", fontFamily:"'Segoe UI',system-ui,sans-serif",
+            }}>{n.title}</div>
+          </foreignObject>
+          <foreignObject x={n.x+9} y={n.y+30} width={NW-26} height={16}>
+            <div xmlns="http://www.w3.org/1999/xhtml" style={{
+              fontSize:10, color:"#64748b", lineHeight:1, pointerEvents:"none",
+              fontFamily:"'Segoe UI',system-ui,sans-serif", whiteSpace:"nowrap",
+              overflow:"hidden", textOverflow:"ellipsis",
+            }}>
+              {n.year}{mt ? " · " + mt.label : ""}{relLabel ? " · " + relLabel : ""}{n.era ? " · " + n.era : ""}
+            </div>
+          </foreignObject>
+          <foreignObject x={n.x+7} y={n.y+NH-26} width={NW-14} height={24}>
+            <div xmlns="http://www.w3.org/1999/xhtml" onClick={e => e.stopPropagation()}
+              style={{ display:"flex", alignItems:"center", gap:5, height:"100%" }}>
+              <select value={status} onChange={e => { e.stopPropagation(); onStatus(n.id, e.target.value); }} style={{
+                flex:1, height:20, fontSize:10, cursor:"pointer", fontWeight:500,
+                background:`${stMeta?.color || "#94a3b8"}15`,
+                border:`1px solid ${stMeta?.color || "#e2e8f0"}`,
+                borderRadius:4, color:stMeta?.color || "#64748b", outline:"none", padding:"0 3px",
+              }}>
+                {Object.entries(STATUS).map(([k, v]) => (
+                  <option key={k} value={k}>{v.label}</option>
+                ))}
+              </select>
+              <a href={imdbSearch(n.title, n.year)} target="_blank" rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                style={{ fontSize:10, fontWeight:700, color:"#ca8a04", textDecoration:"none", flexShrink:0,
+                  background:"#fef9ee", padding:"1px 5px", borderRadius:3, border:"1px solid #fde68a" }}>
+                IMDB↗
+              </a>
+            </div>
+          </foreignObject>
+        </g>
+      );
+    }
+
+    // ── Detail Panel ─────────────────────────────────────────────────────────────
+    function DetailPanel({ node, nodes, statuses, onStatus, onClose, onNav, T }) {
+      const nMap = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
+      const mt = MEDIA.find(m => m.key === node.mediaType);
+      const ess = ESS[node.essentialness];
+      const status = statuses[node.id] || "haven't watched";
+      const stMeta = STATUS[status];
+      return (
+        <div style={{ width:272, flexShrink:0, borderLeft:`1px solid ${T.border}`, background:"#fff", position:"sticky", top:0, maxHeight:"100vh", overflowY:"auto" }}>
+          <div style={{ padding:"12px 13px 10px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:"#fff", zIndex:5 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:5 }}>
+              <div style={{ fontSize:13, fontWeight:700, lineHeight:1.35, flex:1, marginRight:8, color:T.heading }}>{node.title}</div>
+              <button onClick={onClose} style={{ background:"none", border:"none", cursor:"pointer", fontSize:18, lineHeight:1, color:T.faint, padding:0, flexShrink:0 }}>×</button>
+            </div>
+            <div style={{ fontSize:11, color:T.muted, marginBottom:9, display:"flex", gap:5, flexWrap:"wrap", alignItems:"center" }}>
+              {mt && <span style={{ fontWeight:600, color:T.body }}>{mt.label}</span>}
+              <span>·</span><span>{node.year}</span>
+              {node.era && <><span>·</span><span style={{ fontStyle:"italic" }}>{node.era}</span></>}
+              <a href={imdbSearch(node.title, node.year)} target="_blank" rel="noopener noreferrer"
+                style={{ marginLeft:"auto", fontSize:10, fontWeight:700, color:"#ca8a04", textDecoration:"none", background:"#fef9ee", padding:"2px 7px", borderRadius:4, border:"1px solid #fde68a" }}>
+                IMDB↗
+              </a>
+            </div>
+            <select value={status} onChange={e => onStatus(node.id, e.target.value)} style={{
+              width:"100%", height:32, fontSize:12, cursor:"pointer", fontWeight:600,
+              background:`${stMeta?.color || "#94a3b8"}15`,
+              border:`1.5px solid ${stMeta?.color || T.border}`,
+              borderRadius:6, color:stMeta?.color || T.muted, outline:"none", padding:"0 8px",
+            }}>
+              {Object.entries(STATUS).map(([k, v]) => (<option key={k} value={k}>{v.label}</option>))}
+            </select>
+          </div>
+          <div style={{ padding:"12px 13px" }}>
+            <p style={{ margin:"0 0 11px", fontSize:11, color:T.muted, lineHeight:1.65 }}>{node.synopsis}</p>
+            {ess && (
+              <div style={{ display:"flex", alignItems:"center", gap:7, padding:"6px 9px", background:`${ess.dot}12`, border:`1px solid ${ess.dot}44`, borderRadius:6, marginBottom:11 }}>
+                <div style={{ width:7, height:7, borderRadius:"50%", background:ess.dot, flexShrink:0 }} />
+                <span style={{ fontSize:11, fontWeight:600, color:ess.dot }}>{ess.label}</span>
+              </div>
+            )}
+            {node.relationships?.length > 0 && (
+              <div style={{ marginBottom:11 }}>
+                <div style={{ fontSize:10, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5 }}>This entry is</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:3 }}>
+                  {node.relationships.map(r => {
+                    const rm = REL[r]; if (!rm) return null;
+                    return <span key={r} style={{ padding:"2px 8px", borderRadius:12, fontSize:10, fontWeight:600, background:`${rm.color}14`, color:rm.color, border:`1px solid ${rm.color}44` }}>{rm.label}</span>;
+                  })}
+                </div>
+              </div>
+            )}
+            {node.relatedTo?.length > 0 && (
+              <div style={{ marginBottom:11 }}>
+                <div style={{ fontSize:10, fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".06em", marginBottom:5 }}>Connected to</div>
+                {node.relatedTo.map((rel, i) => {
+                  const tgt = nMap[rel.id];
+                  const rk = EDGE_MAP[rel.type] || "crossover";
+                  const rm = REL[rk];
+                  const ts = tgt ? (statuses[tgt.id] || "haven't watched") : null;
+                  const tsm = ts ? STATUS[ts] : null;
+                  return (
+                    <div key={`${rel.id}_${i}`} onClick={() => tgt && onNav(tgt.id)}
+                      style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 8px", background:"#f8fafc", borderRadius:6, marginBottom:3, cursor:tgt ? "pointer" : "default", border:`1px solid ${rm?.color || T.border}25` }}>
+                      <span style={{ width:7, height:7, borderRadius:"50%", background:rm?.color || T.faint, flexShrink:0 }} />
+                      <div style={{ flex:1, overflow:"hidden" }}>
+                        <div style={{ fontSize:9, fontWeight:600, color:rm?.color || T.muted, marginBottom:1 }}>{rm?.label || rel.type}</div>
+                        <div style={{ fontSize:11, color:tgt ? T.body : T.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                          {tgt?.title || rel.id}{tgt && <span style={{ color:T.faint }}> ({tgt.year})</span>}
+                        </div>
+                      </div>
+                      {tsm && ts !== "haven't watched" && <span style={{ width:6, height:6, borderRadius:"50%", background:tsm.color, flexShrink:0 }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {node.notes && (
+              <div style={{ padding:"8px 10px", background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:6 }}>
+                <div style={{ fontSize:10, fontWeight:700, color:"#2563eb", marginBottom:2 }}>📌 Watch order note</div>
+                <div style={{ fontSize:11, color:T.body, lineHeight:1.55 }}>{node.notes}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Mount ────────────────────────────────────────────────────────────────────
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
