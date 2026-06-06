@@ -24,13 +24,14 @@
 
     // ── Config ──────────────────────────────────────────────────────────────────
     const MEDIA = [
-      { key:"film",     label:"Film" },
-      { key:"tv",       label:"TV Series" },
-      { key:"animated", label:"Animated" },
-      { key:"book",     label:"Novel" },
-      { key:"comic",    label:"Comic" },
-      { key:"game",     label:"Video Game" },
-      { key:"short",    label:"Short/Special" },
+      { key:"film",       label:"Film" },
+      { key:"tv",         label:"TV Series" },
+      { key:"animated",   label:"Animated" },
+      { key:"liveaction", label:"Live Action" },
+      { key:"book",       label:"Novel" },
+      { key:"comic",      label:"Comic" },
+      { key:"game",       label:"Video Game" },
+      { key:"short",      label:"Short/Special" },
     ];
 
     const REL = {
@@ -68,13 +69,15 @@
       supplemental: { label:"Supplemental", dot:"#e2e8f0" },
     };
 
-    const imdbSearch = (title, year) =>
-      `https://www.imdb.com/find/?q=${encodeURIComponent(title+(year?" "+year:""))}&s=tt&ttype=ft,tv`;
+    const imdbUrl = (title, year, imdbId) =>
+      imdbId
+        ? `https://www.imdb.com/title/${imdbId}/`
+        : `https://www.imdb.com/find/?q=${encodeURIComponent(title+(year?" "+year:""))}&s=tt&ttype=ft,tv`;
 
     const NH = 72, NW = 340, CARD_GAP = 12;
     const LPAD = 56, CHAIN_W = 24, CARD_X = LPAD + CHAIN_W + 6;
     const TPAD = 20;
-    const DEFAULT_TYPES = ["film","tv","animated"];
+    const DEFAULT_TYPES = ["film","tv"];
     const MAX_SAVED = 15;
 
     // ── System Prompt ───────────────────────────────────────────────────────────
@@ -101,7 +104,8 @@ JSON schema:
     "imdbId": "tt1234567",
     "title": "Official Title",
     "year": 1977,
-    "mediaType": "film|tv|animated|book|comic|game|short",
+    "mediaType": "film|tv|book|comic|game|short",
+    "animated": true,
     "synopsis": "One sentence.",
     "relationships": ["standalone","sequel","prequel","spinoff","remake","reimagining","directors_cut","companion","crossover","anthology","elseworlds","prior_knowledge_helps"],
     "relatedTo": [{"id":"other_entry_id","type":"sequel_of|prequel_of|spinoff_of|remake_of|companion_to|crossover_with|reimagining_of|directors_cut_of|anthology_entry_of"}],
@@ -116,6 +120,8 @@ Rules:
 - Include real IMDB IDs for film/tv/animated
 - Sort entries by year ascending
 - relatedTo.id must exactly match another entry's id
+- mediaType must be "film" or "tv" for all screen content — never use "animated" as a mediaType
+- Set animated: true for any animated/cartoon content, animated: false for live action
 - Include only the requested mediaTypes
 - CRITICAL for sequels: direct sequel/prequel chains must be explicitly linked via relatedTo.`;
 
@@ -167,7 +173,17 @@ Rules:
 
     // ── Layout ──────────────────────────────────────────────────────────────────
     function buildLayout(entries, types) {
-      const vis = [...entries.filter(e => types.includes(e.mediaType))].sort((a, b) => a.year - b.year);
+      const vis = [...entries.filter(e => {
+        const { mediaType: mt, animated: anim } = e;
+        if (["book","comic","game","short"].includes(mt)) return types.includes(mt);
+        if (mt === "film" || mt === "tv") {
+          if (types.includes(mt)) return true;
+          if (anim  && types.includes("animated"))   return true;
+          if (!anim && types.includes("liveaction"))  return true;
+          return false;
+        }
+        return false;
+      })].sort((a, b) => a.year - b.year);
       if (!vis.length) return null;
 
       const nodes = vis.map((e, i) => ({ ...e, x: CARD_X, y: TPAD + i * (NH + CARD_GAP), idx: i }));
@@ -516,7 +532,7 @@ Rules:
               fontFamily:"'Segoe UI',system-ui,sans-serif", whiteSpace:"nowrap",
               overflow:"hidden", textOverflow:"ellipsis",
             }}>
-              {n.year}{mt ? " · " + mt.label : ""}{relLabel ? " · " + relLabel : ""}{n.era ? " · " + n.era : ""}
+              {n.year}{mt ? " · " + mt.label : ""}{(mt?.key==="film"||mt?.key==="tv") ? (n.animated ? " · Animated" : " · Live Action") : ""}{relLabel ? " · " + relLabel : ""}{n.era ? " · " + n.era : ""}
             </div>
           </foreignObject>
           <foreignObject x={n.x+7} y={n.y+NH-26} width={NW-14} height={24}>
@@ -532,7 +548,7 @@ Rules:
                   <option key={k} value={k}>{v.label}</option>
                 ))}
               </select>
-              <a href={imdbSearch(n.title, n.year)} target="_blank" rel="noopener noreferrer"
+              <a href={imdbUrl(n.title, n.year, n.imdbId)} target="_blank" rel="noopener noreferrer"
                 onClick={e => e.stopPropagation()}
                 style={{ fontSize:10, fontWeight:700, color:"#ca8a04", textDecoration:"none", flexShrink:0,
                   background:"#fef9ee", padding:"1px 5px", borderRadius:3, border:"1px solid #fde68a" }}>
@@ -562,7 +578,7 @@ Rules:
               {mt && <span style={{ fontWeight:600, color:T.body }}>{mt.label}</span>}
               <span>·</span><span>{node.year}</span>
               {node.era && <><span>·</span><span style={{ fontStyle:"italic" }}>{node.era}</span></>}
-              <a href={imdbSearch(node.title, node.year)} target="_blank" rel="noopener noreferrer"
+              <a href={imdbUrl(node.title, node.year, node.imdbId)} target="_blank" rel="noopener noreferrer"
                 style={{ marginLeft:"auto", fontSize:10, fontWeight:700, color:"#ca8a04", textDecoration:"none", background:"#fef9ee", padding:"2px 7px", borderRadius:4, border:"1px solid #fde68a" }}>
                 IMDB↗
               </a>
