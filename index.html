@@ -272,24 +272,17 @@ Rules:
 
           {/* Sticky header */}
           <div style={{ padding:"13px 16px 11px", borderBottom:`1px solid ${T.border}`, background:T.panelBg, position:"sticky", top:0, zIndex:10 }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:9 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
               <span style={{ fontSize:17 }}>🔭</span>
               <span style={{ fontSize:14, fontWeight:700, color:T.heading, letterSpacing:"-.01em" }}>Franchise Navigator</span>
-              {franchise && <span style={{ marginLeft:"auto", fontSize:11, color:T.muted, background:"#fff", padding:"2px 9px", borderRadius:20, border:`1px solid ${T.border}` }}>{franchise.ip} · {layout?.nodes.length ?? 0} entries</span>}
             </div>
 
-            <div style={{ display:"flex", gap:7, marginBottom:9 }}>
-              <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && !loading && doSearch()}
-                placeholder="Franchise, actor, or character — e.g. Star Wars · Batman · Tom Cruise"
-                style={{ flex:1, fontSize:13, padding:"7px 11px", borderRadius:7, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none" }} />
-              <button onClick={() => doSearch()} disabled={loading || !query.trim() || !types.length}
-                style={{ fontSize:13, fontWeight:600, cursor:loading ? "wait" : "pointer", padding:"0 16px", height:35, borderRadius:7,
-                  background:(!query.trim() || !types.length || loading) ? "#e2e8f0" : "#0f172a",
-                  color:(!query.trim() || !types.length || loading) ? T.faint : "#fff", border:"none", whiteSpace:"nowrap" }}>
-                {loading ? "⟳ Working…" : "Map It →"}
-              </button>
-            </div>
+            {/* Large search input — full width, easy to click */}
+            <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key === "Enter" && !loading && doSearch()}
+              placeholder="Franchise, actor, or character — e.g. Star Wars · Batman · Tom Cruise"
+              style={{ width:"100%", fontSize:16, padding:"13px 14px", borderRadius:8, border:`1.5px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", marginBottom:10, display:"block" }} />
 
+            {/* Filters row + Map It at the end */}
             <div style={{ display:"flex", gap:5, flexWrap:"wrap", alignItems:"center", marginBottom: saved.length ? 8 : 0 }}>
               {MEDIA.map(m => (
                 <button key={m.key} onClick={() => toggleType(m.key)} style={{
@@ -302,15 +295,22 @@ Rules:
               <span style={{ fontSize:11, color:T.faint, margin:"0 2px" }}>|</span>
               <input type="number" value={yearFrom ?? ""} onChange={e => setYearFrom(e.target.value ? parseInt(e.target.value) : null)}
                 placeholder={allEntryYears.length ? String(Math.min(...allEntryYears)) : "From"}
-                style={{ width:64, height:26, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
+                style={{ width:64, height:28, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
               <span style={{ fontSize:11, color:T.faint }}>–</span>
               <input type="number" value={yearTo ?? ""} onChange={e => setYearTo(e.target.value ? parseInt(e.target.value) : null)}
                 placeholder="2026"
-                style={{ width:64, height:26, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
+                style={{ width:64, height:28, fontSize:11, padding:"0 6px", borderRadius:6, border:`1px solid ${T.border}`, background:"#fff", color:T.body, outline:"none", textAlign:"center" }} />
               {(yearFrom || yearTo) && (
                 <button onClick={() => { setYearFrom(null); setYearTo(null); }}
-                  style={{ fontSize:11, color:T.muted, background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"2px 8px", cursor:"pointer", height:26 }}>Reset</button>
+                  style={{ fontSize:11, color:T.muted, background:"#fff", border:`1px solid ${T.border}`, borderRadius:6, padding:"2px 8px", cursor:"pointer", height:28 }}>Reset</button>
               )}
+              <button onClick={() => doSearch()} disabled={loading || !query.trim() || !types.length}
+                style={{ fontSize:12, fontWeight:600, cursor:loading ? "wait" : "pointer", padding:"0 14px", height:28, borderRadius:6,
+                  background:(!query.trim() || !types.length || loading) ? "#e2e8f0" : "#0f172a",
+                  color:(!query.trim() || !types.length || loading) ? T.faint : "#fff", border:"none", whiteSpace:"nowrap" }}>
+                {loading ? "⟳" : "Map It →"}
+              </button>
+              {franchise && <span style={{ fontSize:11, color:T.muted, background:"#fff", padding:"2px 9px", borderRadius:20, border:`1px solid ${T.border}`, whiteSpace:"nowrap" }}>{franchise.ip} · {layout?.nodes.length ?? 0} entries</span>}
             </div>
 
             {saved.length > 0 && (
@@ -329,7 +329,7 @@ Rules:
               </div>
             )}
 
-            {franchise && <p style={{ margin:"9px 0 0", fontSize:11, color:T.muted, lineHeight:1.55 }}>{franchise.description}</p>}
+            {franchise && <p style={{ margin:"9px 0 0", fontSize:11, color:T.muted, lineHeight:1.55, maxWidth:"860px" }}>{franchise.description}</p>}
           </div>
 
           {error && <div style={{ margin:"12px 16px", padding:"9px 13px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, fontSize:12, color:"#b91c1c", whiteSpace:"pre-wrap" }}>⚠ {error}</div>}
