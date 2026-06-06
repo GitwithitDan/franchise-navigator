@@ -357,10 +357,10 @@ Rules:
           </div>
 
           {franchise && !loading && (
-            <div style={{ padding:"7px 16px", borderTop:`1px solid ${T.border}`, background:T.panelBg, display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", position:"sticky", bottom:0, zIndex:10 }}>
+            <div style={{ padding:"7px 16px", borderTop:`1px solid ${T.border}`, background:T.panelBg, display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", position:"sticky", bottom:0, zIndex:10, fontSize:11, color:T.muted }}>
               {Object.entries(REL).map(([k, v]) => (
-                <span key={k} style={{ padding:"2px 9px", borderRadius:12, fontSize:11, fontWeight:600, background:`${v.color}18`, color:v.color, border:`1px solid ${v.color}44` }}>
-                  {v.label}
+                <span key={k} style={{ display:"flex", alignItems:"center", gap:4 }}>
+                  <span style={{ width:16, height:3, background:v.color, display:"inline-block", borderRadius:2 }} />{v.label}
                 </span>
               ))}
             </div>
