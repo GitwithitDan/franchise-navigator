@@ -348,7 +348,7 @@ Rules:
           </div>
 
           {franchise && !loading && (
-            <div style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}`, background:T.panelBg, display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", fontSize:11, color:T.muted }}>
+            <div style={{ padding:"10px 16px", borderTop:`1px solid ${T.border}`, background:T.panelBg, display:"flex", gap:14, flexWrap:"wrap", alignItems:"center", fontSize:11, color:T.muted, position:"sticky", bottom:0, zIndex:10 }}>
               <span style={{ fontWeight:700, color:T.faint, textTransform:"uppercase", letterSpacing:".05em", fontSize:10 }}>Connections:</span>
               {Object.entries(REL).map(([k, v]) => (
                 <span key={k} style={{ display:"flex", alignItems:"center", gap:4 }}>
