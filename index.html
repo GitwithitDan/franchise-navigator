@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Franchise Navigator — DTDM</title>
   <meta name="description" content="Map any film, TV, or media franchise. See sequels, prequels, spinoffs and watch order at a glance." />
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js" integrity="sha384-RgwZ6hj+t5cUuE1+O8VrbNENCeVFTIjTroWdTHusMbpfssSx1gxln5reSjtRkxWs"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { height: 100%; }
@@ -43,6 +43,10 @@
       directors_cut:         { label:"Director\u2019s Cut",   color:"#ca8a04" },
       crossover:             { label:"Crossover / Related",   color:"#0d9488" },
       prior_knowledge_helps: { label:"Prior Context Helps",   color:"#94a3b8" },
+      reimagining:           { label:"Re-imagining",          color:"#be123c" },
+      companion:             { label:"Companion",             color:"#0891b2" },
+      anthology:             { label:"Anthology Entry",       color:"#65a30d" },
+      elseworlds:            { label:"Elseworlds / Alt Universe", color:"#c026d3" },
     };
 
     const EDGE_MAP = {
@@ -79,51 +83,7 @@
     const TPAD = 20;
     const DEFAULT_TYPES = ["film","tv"];
     const MAX_SAVED = 15;
-
-    // ── System Prompt ───────────────────────────────────────────────────────────
-    const SYS = `You are a media franchise expert. Your primary data reference is IMDB. Return ONLY a single valid JSON object — no markdown, no code fences, no preamble, no trailing text.
-
-The query may be a franchise/IP name, actor name, or character name.
-
-For CHARACTER searches (e.g. "The Hulk", "Spider-Man", "Batman"):
-- Include ALL media where the character appears significantly — not just films/shows named after them
-- Include crossover appearances (e.g. The Hulk appears in The Avengers, Thor: Ragnarok, etc. — include those)
-- Include every film, show, or series where the character has a meaningful role even if it is not the title character
-
-For ACTOR searches: include all significant works they appeared in.
-
-For FRANCHISE searches: include all entries in the franchise universe that are related.
-
-JSON schema:
-{
-  "ip": "Canonical name",
-  "searchType": "franchise|actor|character",
-  "description": "Two sentences: what it is, and why navigating it is complex.",
-  "entries": [{
-    "id": "unique_snake_case_id",
-    "imdbId": "tt1234567",
-    "title": "Official Title",
-    "year": 1977,
-    "mediaType": "film|tv|book|comic|game|short",
-    "animated": true,
-    "synopsis": "One sentence.",
-    "relationships": ["standalone","sequel","prequel","spinoff","remake","reimagining","directors_cut","companion","crossover","anthology","elseworlds","prior_knowledge_helps"],
-    "relatedTo": [{"id":"other_entry_id","type":"sequel_of|prequel_of|spinoff_of|remake_of|companion_to|crossover_with|reimagining_of|directors_cut_of|anthology_entry_of"}],
-    "essentialness": "essential|recommended|optional|supplemental",
-    "era": "optional grouping label",
-    "notes": "optional one-sentence watch-order tip"
-  }]
-}
-
-Rules:
-- Include ALL entries that exist within the requested media types and date range — do not cap or omit any
-- Include real IMDB IDs for film/tv/animated
-- Sort entries by year ascending
-- relatedTo.id must exactly match another entry's id
-- mediaType must be "film" or "tv" for all screen content — never use "animated" as a mediaType
-- Set animated: true for any animated/cartoon content, animated: false for live action
-- Include only the requested mediaTypes
-- CRITICAL for sequels: direct sequel/prequel chains must be explicitly linked via relatedTo.`;
+    const yr = y => (y ?? "TBA");
 
     // ── Storage (localStorage) ──────────────────────────────────────────────────
     function storageGet(key) {
@@ -137,24 +97,22 @@ Rules:
     // ── API ─────────────────────────────────────────────────────────────────────
     async function fetchFranchise(query, types) {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 60000);
+      const t = setTimeout(() => ctrl.abort(), 120000);
       let resp;
       try {
         resp = await fetch("/api/map", {
           method: "POST", signal: ctrl.signal,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 16000,
-            system: SYS,
-            messages: [{ role: "user", content: `Query: "${query}"\nMedia types: ${types.join(", ")}\nInclude every entry that exists. Return JSON only. Start your response with {"ip": and nothing else before it.` }],
-          }),
+          body: JSON.stringify({ query, types }),
         });
+      } catch (e) {
+        throw new Error(e.name === "AbortError" ? "Timed out after 2 minutes — try again or narrow the media types." : e.message);
       } finally { clearTimeout(t); }
 
       if (!resp.ok) { const b = await resp.text().catch(() => ""); throw new Error(`API ${resp.status}: ${b.slice(0, 200)}`); }
       const data = await resp.json();
       if (data.error) throw new Error(data.error.message);
+      if (data.stop_reason === "max_tokens") throw new Error("Result too large and was cut off — narrow the media types or search a more specific title.");
 
       const full = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("");
       if (!full.trim()) throw new Error("Empty response");
@@ -168,6 +126,11 @@ Rules:
       try { parsed = JSON.parse(full.slice(knownStart, end + 1)); }
       catch (err) { throw new Error("JSON parse failed: " + err.message + "\n\n" + full.slice(knownStart, knownStart + 300)); }
       if (!parsed.entries || !Array.isArray(parsed.entries)) throw new Error("Missing entries array");
+
+      parsed.entries = parsed.entries
+        .filter(e => e && e.id && e.title)
+        .map(e => { const y = parseInt(e.year, 10); return { ...e, year: Number.isFinite(y) ? y : null }; });
+      parsed.fetchedTypes = types;
       return parsed;
     }
 
@@ -183,7 +146,7 @@ Rules:
           return false;
         }
         return false;
-      })].sort((a, b) => a.year - b.year);
+      })].sort((a, b) => (a.year ?? 9999) - (b.year ?? 9999));
       if (!vis.length) return null;
 
       const nodes = vis.map((e, i) => ({ ...e, x: CARD_X, y: TPAD + i * (NH + CARD_GAP), idx: i }));
@@ -254,7 +217,7 @@ Rules:
           setSaved(prev => {
             const filtered = prev.filter(s => s.query.toLowerCase() !== q.trim().toLowerCase());
             const next = [{ query: q.trim(), types: t, data, timestamp: Date.now(),
-              entryCount: data.entries.filter(e => t.includes(e.mediaType)).length }, ...filtered].slice(0, MAX_SAVED);
+              entryCount: data.entries.length }, ...filtered].slice(0, MAX_SAVED);
             storageSet("fn-saved", next); return next;
           });
         } catch (e) { setError(e.message || String(e)); }
@@ -265,16 +228,31 @@ Rules:
         const next = prev.filter(s => s.timestamp !== ts); storageSet("fn-saved", next); return next;
       });
 
-      const allEntryYears = franchise?.entries?.map(e => e.year) || [];
+      const allEntryYears = (franchise?.entries?.map(e => e.year) || []).filter(y => y != null);
 
       const layout = useMemo(() => {
         if (!franchise) return null;
         const filtered = franchise.entries.filter(e => {
           const y = e.year;
+          if (y == null) return !yearFrom && !yearTo;
           return (!yearFrom || y >= yearFrom) && (!yearTo || y <= yearTo);
         });
         return buildLayout(filtered, types);
       }, [franchise, types, yearFrom, yearTo]);
+
+      const missingTypes = useMemo(() => {
+        if (!franchise?.fetchedTypes) return [];
+        const f = franchise.fetchedTypes;
+        const covered = k => f.includes(k) || ((k === "animated" || k === "liveaction") && (f.includes("film") || f.includes("tv") || f.includes("animated") || f.includes("liveaction")));
+        return types.filter(k => !covered(k));
+      }, [franchise, types]);
+
+      const [narrow, setNarrow] = useState(typeof window !== "undefined" && window.innerWidth < 720);
+      useEffect(() => {
+        const h = () => setNarrow(window.innerWidth < 720);
+        window.addEventListener("resize", h);
+        return () => window.removeEventListener("resize", h);
+      }, []);
 
       const selNode = useMemo(() => layout?.nodes.find(n => n.id === selId) || null, [layout, selId]);
 
@@ -350,6 +328,13 @@ Rules:
 
           {error && <div style={{ margin:"12px 16px", padding:"9px 13px", background:"#fef2f2", border:"1px solid #fca5a5", borderRadius:7, fontSize:12, color:"#b91c1c", whiteSpace:"pre-wrap" }}>⚠ {error}</div>}
 
+          {missingTypes.length > 0 && !loading && (
+            <div style={{ margin:"12px 16px", padding:"9px 13px", background:"#eff6ff", border:"1px solid #bfdbfe", borderRadius:7, fontSize:12, color:"#1e3a8a", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}>
+              <span>These results were mapped without: {missingTypes.map(k => MEDIA.find(m => m.key === k)?.label || k).join(", ")}.</span>
+              <button onClick={() => doSearch(franchise.ip || query)} style={{ fontSize:12, fontWeight:600, padding:"3px 12px", borderRadius:6, border:"none", background:"#2563eb", color:"#fff", cursor:"pointer" }}>Re-map with current filters</button>
+            </div>
+          )}
+
           {loading && <LoadingProgress T={T} query={query} />}
 
           <div style={{ display:"flex" }}>
@@ -368,7 +353,7 @@ Rules:
             </div>
             {selNode && (
               <DetailPanel node={selNode} nodes={layout.nodes} statuses={statuses}
-                onStatus={updateStatus} onClose={() => setSelId(null)} onNav={setSelId} T={T} />
+                onStatus={updateStatus} onClose={() => setSelId(null)} onNav={setSelId} T={T} narrow={narrow} />
             )}
           </div>
 
@@ -453,7 +438,7 @@ Rules:
             return (
               <text key={`yr_${i}`} x={LPAD - 6} y={n.y + NH / 2} textAnchor="end" dominantBaseline="central"
                 fontSize={11} fontWeight="700" fill="#94a3b8" fontFamily="'Segoe UI',system-ui,sans-serif">
-                {n.year}
+                {yr(n.year)}
               </text>
             );
           })}
@@ -532,7 +517,7 @@ Rules:
               fontFamily:"'Segoe UI',system-ui,sans-serif", whiteSpace:"nowrap",
               overflow:"hidden", textOverflow:"ellipsis",
             }}>
-              {n.year}{mt ? " · " + mt.label : ""}{(mt?.key==="film"||mt?.key==="tv") ? (n.animated ? " · Animated" : " · Live Action") : ""}{relLabel ? " · " + relLabel : ""}{n.era ? " · " + n.era : ""}
+              {yr(n.year)}{mt ? " · " + mt.label : ""}{(mt?.key==="film"||mt?.key==="tv") ? (n.animated ? " · Animated" : " · Live Action") : ""}{relLabel ? " · " + relLabel : ""}{n.era ? " · " + n.era : ""}
             </div>
           </foreignObject>
           <foreignObject x={n.x+7} y={n.y+NH-26} width={NW-14} height={24}>
@@ -561,14 +546,16 @@ Rules:
     }
 
     // ── Detail Panel ─────────────────────────────────────────────────────────────
-    function DetailPanel({ node, nodes, statuses, onStatus, onClose, onNav, T }) {
+    function DetailPanel({ node, nodes, statuses, onStatus, onClose, onNav, T, narrow }) {
       const nMap = useMemo(() => Object.fromEntries(nodes.map(n => [n.id, n])), [nodes]);
       const mt = MEDIA.find(m => m.key === node.mediaType);
       const ess = ESS[node.essentialness];
       const status = statuses[node.id] || "haven't watched";
       const stMeta = STATUS[status];
       return (
-        <div style={{ width:272, flexShrink:0, borderLeft:`1px solid ${T.border}`, background:"#fff", position:"sticky", top:0, maxHeight:"100vh", overflowY:"auto" }}>
+        <div style={narrow
+          ? { position:"fixed", left:0, right:0, bottom:0, maxHeight:"70vh", zIndex:30, borderTop:`1px solid ${T.border}`, boxShadow:"0 -4px 16px #0000001f", background:"#fff", overflowY:"auto" }
+          : { width:272, flexShrink:0, borderLeft:`1px solid ${T.border}`, background:"#fff", position:"sticky", top:0, maxHeight:"100vh", overflowY:"auto" }}>
           <div style={{ padding:"12px 13px 10px", borderBottom:`1px solid ${T.border}`, position:"sticky", top:0, background:"#fff", zIndex:5 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:5 }}>
               <div style={{ fontSize:13, fontWeight:700, lineHeight:1.35, flex:1, marginRight:8, color:T.heading }}>{node.title}</div>
@@ -576,7 +563,7 @@ Rules:
             </div>
             <div style={{ fontSize:11, color:T.muted, marginBottom:9, display:"flex", gap:5, flexWrap:"wrap", alignItems:"center" }}>
               {mt && <span style={{ fontWeight:600, color:T.body }}>{mt.label}</span>}
-              <span>·</span><span>{node.year}</span>
+              <span>·</span><span>{yr(node.year)}</span>
               {node.era && <><span>·</span><span style={{ fontStyle:"italic" }}>{node.era}</span></>}
               <a href={imdbUrl(node.title, node.year, node.imdbId)} target="_blank" rel="noopener noreferrer"
                 style={{ marginLeft:"auto", fontSize:10, fontWeight:700, color:"#ca8a04", textDecoration:"none", background:"#fef9ee", padding:"2px 7px", borderRadius:4, border:"1px solid #fde68a" }}>
@@ -627,7 +614,7 @@ Rules:
                       <div style={{ flex:1, overflow:"hidden" }}>
                         <div style={{ fontSize:9, fontWeight:600, color:rm?.color || T.muted, marginBottom:1 }}>{rm?.label || rel.type}</div>
                         <div style={{ fontSize:11, color:tgt ? T.body : T.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                          {tgt?.title || rel.id}{tgt && <span style={{ color:T.faint }}> ({tgt.year})</span>}
+                          {tgt?.title || rel.id}{tgt && <span style={{ color:T.faint }}> ({yr(tgt.year)})</span>}
                         </div>
                       </div>
                       {tsm && ts !== "haven't watched" && <span style={{ width:6, height:6, borderRadius:"50%", background:tsm.color, flexShrink:0 }} />}
